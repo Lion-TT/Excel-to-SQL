@@ -1,0 +1,98 @@
+{
+  "customer_analysis": {
+    "first_week_analysis": {
+      "description": "客户首周各品类分析",
+      "categories": [
+        {
+          "name": "蔬菜水果",
+          "short_name": "蔬菜",
+          "sales_column": "首周蔬菜销售额",
+          "frequency_column": "首周蔬菜频次"
+        },
+        {
+          "name": "米面粮油",
+          "short_name": "米面",
+          "sales_column": "首周米面销售额",
+          "frequency_column": "首周米面频次"
+        },
+        {
+          "name": "冷冻半成品",
+          "short_name": "冷冻半成品",
+          "sales_column": "首周冷冻半成品销售额",
+          "frequency_column": "首周冷冻半成品频次"
+        },
+        {
+          "name": "餐厨用品",
+          "short_name": "餐厨",
+          "sales_column": "首周餐厨销售额",
+          "frequency_column": "首周餐厨频次"
+        },
+        {
+          "name": "调料干货",
+          "short_name": "调料",
+          "sales_column": "首周调料销售额",
+          "frequency_column": "首周调料频次"
+        },
+        {
+          "name": "鲜蛋及蛋制品",
+          "short_name": "鲜蛋",
+          "sales_column": "首周鲜蛋销售额",
+          "frequency_column": "首周鲜蛋频次"
+        },
+        {
+          "name": "冷冻饮品、饮料、酒",
+          "short_name": "饮品",
+          "sales_column": "首周饮品销售额",
+          "frequency_column": "首周饮品频次"
+        },
+        {
+          "name": "速食熟食",
+          "short_name": "速食",
+          "sales_column": "首周速食销售额",
+          "frequency_column": "首周速食频次"
+        },
+        {
+          "name": "肉禽水产（冷冻）",
+          "short_name": "冷冻肉",
+          "sales_column": "首周冷冻肉销售额",
+          "frequency_column": "首周冷冻肉频次"
+        },
+        {
+          "name": "调理包",
+          "short_name": "调理包",
+          "sales_column": "首周调理包销售额",
+          "frequency_column": "首周调理包频次"
+        },
+        {
+          "name": "肉禽水产（鲜）",
+          "short_name": "鲜肉",
+          "sales_column": "首周鲜肉销售额",
+          "frequency_column": "首周鲜肉频次"
+        },
+        {
+          "name": "休闲食品",
+          "short_name": "休闲食品",
+          "sales_column": "首周休闲食品销售额",
+          "frequency_column": "首周休闲食品频次"
+        },
+        {
+          "name": "焙烤食品",
+          "short_name": "焙烤",
+          "sales_column": "首周焙烤销售额",
+          "frequency_column": "首周焙烤频次"
+        }
+      ],
+      "parameters": {
+        "first_week_days": 6,
+        "decimal_places": 2
+      }
+    },
+    "repurchase_analysis": {
+      "description": "客户复购分析",
+      "parameters": {
+        "first_week_days": 6,
+        "min_repurchase_count": 2
+      }
+    }
+  }
+} 
