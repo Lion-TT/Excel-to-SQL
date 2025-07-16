@@ -7,13 +7,15 @@ from datetime import datetime
 import logging
 from typing import Optional, Tuple, List
 from src.importers.xlsx_to_csv import convert_excel_to_csv_by_schema
-from src.importers.db_importer import import_table, import_dataframe_to_mysql
+from src.importers.db_importer import import_table, import_dataframe_to_mysql, truncate_table
 from src.shared.table_schemas import TABLE_SCHEMAS
-from src.shared.config import DATA_SOURCES, get_excel_dir, get_csv_dir_for_table, BATCH_GROUPS, TABLE_COLUMNS
+from src.shared.config import DATA_SOURCES, get_excel_dir, get_csv_dir_for_table, BATCH_GROUPS, TABLE_COLUMNS, get_update_strategy
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, Future
 import queue
 import threading
+from src.importers.db_importer import engine
+
 
 # 配置日志
 logging.basicConfig(
@@ -43,6 +45,9 @@ class ConcurrentExcelImporter:
         self.producer_executor = ThreadPoolExecutor(max_workers=self.max_producers, thread_name_prefix='Producer')
         self.consumer_executor = ThreadPoolExecutor(max_workers=self.max_consumers, thread_name_prefix='Consumer')
         self.table_locks = {}
+        # 新增: 用于确保truncate操作只执行一次的锁和集合
+        self._truncate_once_lock = threading.Lock()
+        self._truncated_tables = set()
 
     def log_progress(self, message: str, level: str = "INFO"):
         logger.log(getattr(logging, level.upper()), message)
@@ -76,7 +81,7 @@ class ConcurrentExcelImporter:
             if self.should_stop.is_set(): return
             self.log_progress(f"开始处理: {os.path.basename(excel_path)}")
             df = pd.read_excel(excel_path, dtype=str)
-
+            
             # 根据 schema 过滤列
             required_cols = TABLE_COLUMNS.get(table_name)
             if required_cols:
@@ -101,7 +106,7 @@ class ConcurrentExcelImporter:
             if df.empty:
                 self.log_progress(f"去重后数据为空，跳过", "WARNING")
                 return
-
+            
             is_valid, msg = self._validate_dataframe(df, table_name)
             if not is_valid: raise ValueError(f"数据验证失败: {msg}")
 
@@ -118,13 +123,32 @@ class ConcurrentExcelImporter:
             try:
                 df, table_name = self.dataframe_queue.get(timeout=1)
                 
+                # --- 新增: "只清空一次" 逻辑 ---
+                update_strategy = get_update_strategy(table_name)
+                if update_strategy == 'truncate':
+                    with self._truncate_once_lock:
+                        if table_name not in self._truncated_tables:
+                            try:
+                                self.log_progress(f"检测到 'truncate' 策略，首次任务将清空表: {table_name}")
+                                truncate_table(table_name, engine)
+                                self._truncated_tables.add(table_name)
+                            except Exception as e:
+                                self.log_progress(f"清空表 {table_name} 失败: {e}", "ERROR")
+                                self.error_queue.put(f"清空表 {table_name} 失败: {e}")
+                                # 如果清空失败，应该停止后续所有操作
+                                self.should_stop.set()
+                                self.dataframe_queue.task_done()
+                                self.pending_tasks.get()
+                                continue
+                # --- 逻辑结束 ---
+
                 lock = self.table_locks.get(table_name)
                 if not lock:
                     self.log_progress(f"警告: 未找到表 '{table_name}' 的锁，跳过此任务。", "WARNING")
                     self.dataframe_queue.task_done()
                     self.pending_tasks.get()
                     continue
-
+                
                 with lock:
                     self.log_progress(f"开始导入 '{table_name}' ({len(df)}行)")
                     import_dataframe_to_mysql(df, table_name)

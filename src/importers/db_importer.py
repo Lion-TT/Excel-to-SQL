@@ -99,6 +99,21 @@ def table_exists(table_name, engine):
     inspector = inspect(engine)
     return inspector.has_table(table_name)
 
+def truncate_table(table_name, engine):
+    """
+    清空指定的数据库表。
+    """
+    print(f"执行清空表操作: {table_name}")
+    try:
+        with engine.connect() as connection:
+            with connection.begin(): # 使用事务确保TRUNCATE被正确执行
+                connection.execute(text(f"TRUNCATE TABLE `{table_name}`"))
+        print(f"成功清空表: {table_name}")
+    except Exception as e:
+        print(f"清空表 '{table_name}' 失败: {e}")
+        # 重新抛出异常，以便上层调用者可以捕获它
+        raise
+
 def sync_table_schema(table_name, engine):
     """
     自动同步table_schemas.py和数据库表结构：新建表、加字段、删字段、类型变更、字段重命名
@@ -276,23 +291,6 @@ def import_table(table_name):
         if len(tb_lines) > 10:
             print("...（traceback已截断）")
 
-def batch_import_all():
-    """
-    批量导入所有配置的表
-    """
-    table_names = get_all_table_names()
-    if not table_names:
-        print("未找到任何配置的表")
-        return
-    
-    print(f"开始批量导入所有表，共 {len(table_names)} 个表...")
-    for table_name in table_names:
-        print(f"\n{'='*50}")
-        import_table(table_name)
-    
-    print(f"\n{'='*50}")
-    print("全部导入完成！")
-
 def import_dataframe_to_mysql(df, table_name, chunk_size=20000):
     """
     直接将DataFrame分块导入指定表
@@ -333,75 +331,51 @@ def import_dataframe_to_mysql(df, table_name, chunk_size=20000):
         # 动态获取期望列名并修正DataFrame列
         original_columns = TABLE_COLUMNS.get(table_name)
         current_columns = list(df.columns)
-        if original_columns:
-            if len(current_columns) != len(original_columns) or any('_m' in col for col in current_columns):
-                print(f"检测到列名问题，尝试修正...")
-                print(f"当前列名: {current_columns[:5]}...")
-                df.columns = original_columns
-                print(f"修正后列名: {list(df.columns)}")
-            else:
-                pass  # 列名正常
-        else:
-            print(f"未配置期望列名，直接使用DataFrame表头。实际列数: {len(current_columns)}")
         
-        print(f"DataFrame列数: {len(df.columns)}")
+        if original_columns:
+            print(f"DataFrame列数: {len(current_columns)}, 配置列数: {len(original_columns)}")
+            # 如果列名完全不匹配，但数量匹配，则认为是旧版重命名逻辑，强制使用配置的列名
+            if len(current_columns) == len(original_columns) and not set(current_columns).intersection(set(original_columns)):
+                 print("检测到列名可能不匹配，强制重命名。")
+                 df.columns = original_columns
+            else: # 否则，只保留在配置中存在的列，保持顺序
+                df = df[[col for col in original_columns if col in current_columns]]
+        else:
+            print(f"未配置期望列名，使用DataFrame的原始列。列数: {len(current_columns)}")
+
         print(f"原始DataFrame总行数: {len(df)}")
         
-        df_to_import = df # 默认设置为完整DataFrame
+        df_to_import = None
 
         # 根据更新策略处理数据
-        if update_strategy == 'truncate':
-            # 清空重传策略
-            print("执行清空重传策略...")
-            for attempt in range(max_retries):
-                try:
-                    with engine.connect() as conn:
-                        conn.execute(text(f"TRUNCATE TABLE {table_name}"))
-                    print(f"已清空表 '{table_name}'")
-                    break # 成功则退出重试
-                except SQLAlchemyError as e:
-                    print(f"[尝试 {attempt+1}/{max_retries}] 清空表 '{table_name}' 失败: {str(e)[:300]}...")
-                    if attempt < max_retries - 1:
-                        time.sleep(initial_delay * (2 ** attempt)) # 指数退避
-                    else:
-                        raise # 达到最大重试次数，抛出异常
-            
-        elif update_strategy == 'incremental':
+        if update_strategy == 'incremental':
             # 增量更新策略
             print("执行增量更新策略...")
             
-            # 获取数据库中已存在的主键值，用于去重
-            existing_keys = set()
-            for attempt in range(max_retries):
-                try:
-                    with engine.connect() as conn:
-                        result = conn.execute(text(f"SELECT `{primary_key}` FROM `{table_name}`"))
-                        # 确保将数据库中获取的主键值转换为字符串类型，以匹配DataFrame中的主键类型
-                        existing_keys = set(str(row[0]) for row in result.fetchall())
-                    print(f"[尝试 {attempt+1}/{max_retries}] 成功获取数据库中已存在 {len(existing_keys)} 条记录")
-                    break
-                except SQLAlchemyError as e:
-                    print(f"[尝试 {attempt+1}/{max_retries}] 获取数据库中已存在主键失败: {str(e)[:300]}...")
-                    if attempt < max_retries - 1:
-                        time.sleep(initial_delay * (2 ** attempt)) # 指数退避
-                    else:
-                        raise # 达到最大重试次数，抛出异常
+            # 获取数据库中已存在的主键值
+            try:
+                with engine.connect() as conn:
+                    result = conn.execute(text(f"SELECT `{primary_key}` FROM `{table_name}`"))
+                    existing_keys = {row[0] for row in result.fetchall()}
+                print(f"数据库中已存在 {len(existing_keys)} 条记录的主键")
+            except Exception as e:
+                print(f"查询已存在主键失败: {e}，将导入所有数据。")
+                existing_keys = set()
             
             # 过滤掉已存在的主键，只保留新数据
-            # 确保DataFrame中的主键列也转换为字符串类型以进行正确比较
-            df_primary_key_series = df_to_import[primary_key].astype(str)
             if len(existing_keys) > 0:
-                df_new = df_to_import[~df_primary_key_series.isin(existing_keys)]
+                df_new = df[~df[primary_key].isin(existing_keys)]
                 print(f"过滤已存在数据后，新增行数: {len(df_new)}")
             else:
-                df_new = df_to_import
+                df_new = df
                 print(f"数据库为空，将导入所有 {len(df_new)} 行数据")
-            
-            if len(df_new) == 0: # 如果没有新数据需要导入，直接返回
-                print("没有新数据需要导入")
-                return 
-            
+
             df_to_import = df_new
+        else:
+            # 对于 'truncate' 和 'append' 策略，我们直接使用传入的DataFrame
+            # 'truncate' 的清空操作已移至 importer 主控逻辑中
+            print("执行追加或清空重传（仅追加数据部分）策略...")
+            df_to_import = df
         
         # 对数据进行去重（Excel内部可能有重复，或增量更新后需确保导入的数据无重复）
         if primary_key: # 只有有主键的表才进行去重
